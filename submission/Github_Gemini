@@ -1,0 +1,82 @@
+Disaster Recovery Plan: Google Cloud us-central1 Regional Outage
+Scenario: A regional outage has occurred in Google Cloud's us-central1 region, impacting all services hosted within that region. Our primary application infrastructure and data reside in us-central1.
+
+S - Situation
+A complete regional outage in us-central1 means:
+
+All Compute Engine instances, Kubernetes clusters, Cloud SQL instances, and other us-central1-specific services are offline.
+Applications dependent on us-central1 resources are inaccessible.
+Data stored exclusively in us-central1 (e.g., single-region Cloud Storage buckets, non-replicated databases) is currently unavailable.
+Business continuity is severely impacted, requiring rapid failover to a healthy region to minimize downtime and data loss.
+T - Task
+The immediate task is to activate our disaster recovery plan to:
+
+Minimize Downtime: Restore critical application functionality as quickly as possible.
+Minimize Data Loss: Ensure data integrity and recover the most recent state of our data.
+Failover to a Healthy Region: Redirect user traffic to our secondary, healthy region (us-east1 in this plan).
+Monitor and Verify: Confirm the successful failover and operational status of services in the secondary region.
+Plan for Recovery: Prepare for the eventual restoration of services in us-central1 and failback when the region is healthy.
+A - Action (Failover and Recovery Process)
+Our disaster recovery strategy leverages Google Cloud's global infrastructure and managed services to enable rapid failover. We have pre-configured our environment for multi-region resilience.
+
+Pre-requisites & Architecture (Pre-Outage):
+
+Primary Region: us-central1
+Secondary/DR Region: us-east1 (chosen for geographical separation and low latency)
+Application Deployment: Our core application is deployed in an active-passive or active-active configuration across us-central1 and us-east1, using instance groups, GKE clusters, or similar compute resources.
+Cloud SQL: Our primary Cloud SQL instance is in us-central1. We have a cross-region read replica in us-east1 (e.g., PostgreSQL or MySQL). For critical databases, consider a cross-region failover replica for automatic failover capabilities if supported by the database type (e.g., Cloud SQL for PostgreSQL High Availability setup with cross-region failover replica enabled).
+Cloud Storage: We use multi-region Cloud Storage buckets for all critical application data and backups (e.g., gs://my-critical-data configured as multi-region in the US). This ensures data is automatically replicated across multiple regions (including us-central1 and us-east1) and remains available even if one region fails.
+DNS: We use Cloud DNS with Traffic Steering Policies (e.g., Geolocation or Failover) to route traffic to the healthy region.
+Pub/Sub: Critical application events and internal communications leverage Pub/Sub. We have multi-region Pub/Sub topic configuration (or separate topics per region with cross-region subscriptions/forwarding) to ensure message delivery resilience.
+Monitoring & Alerting: Cloud Monitoring and Cloud Logging are configured with custom metrics and logs to detect service degradation and trigger alerts via Pub/Sub alerts (which can then trigger external notification systems like PagerDuty, Slack, or email).
+Failover Steps during us-central1 Outage:
+
+Automated Outage Detection & Alerting:
+
+Cloud Monitoring detects a significant increase in error rates, latency, or complete unavailability of services in us-central1.
+Pre-configured Pub/Sub alerts (e.g., projects/my-project/topics/dr-alerts) are triggered. These alerts immediately notify our on-call team via various channels (SMS, email, PagerDuty integration).
+DNS Failover Initiation (Manual or Automated):
+
+Upon receiving the outage alert, the DR team immediately initiates the DNS failover process.
+Cloud DNS Traffic Steering Policy: If configured with a Failover policy, Cloud DNS automatically detects the health check failure in us-central1 and reroutes traffic to the us-east1 endpoint.
+Manual Override (if automated failover not fully configured): The DR team manually updates the Cloud DNS A records to point to the us-east1 external IP address (e.g., Load Balancer IP) or the us-east1 specific CNAME. This change propagates globally, directing new user traffic to the secondary region.
+Cloud SQL Failover:
+
+Cross-Region Read Replica Promotion: Our Cloud SQL read replica in us-east1 is immediately promoted to a standalone primary instance. This is a critical step to ensure data consistency and allow the application in us-east1 to connect to a writable database.
+gcloud sql instances promote-replica [REPLICA_INSTANCE_NAME] --project=[PROJECT_ID]
+Application Reconfiguration: The application instances in us-east1 are configured to connect to the newly promoted Cloud SQL primary instance. This might involve updating connection strings in application configuration files or environment variables.
+Application Activation in us-east1:
+
+Our pre-provisioned application instances/clusters in us-east1 are already running (active-active) or are brought online (active-passive) if not already.
+Traffic is now flowing to these instances via the updated DNS.
+The application starts serving requests, utilizing the promoted Cloud SQL instance and the multi-region Cloud Storage buckets.
+Data Consistency with Multi-Region Cloud Storage:
+
+Since critical data is stored in multi-region Cloud Storage buckets, data written before the us-central1 outage is automatically available in us-east1.
+New data written by the application in us-east1 is also written to the multi-region bucket, maintaining global consistency.
+Pub/Sub Message Handling:
+
+Existing Pub/Sub topics are configured for multi-region use. Messages published to these topics will be delivered to subscribers in us-east1 even if us-central1 is down.
+If using separate regional topics, the application in us-east1 will publish and subscribe to the us-east1 specific topics.
+R - Result
+By executing this plan, we achieve the following results:
+
+Minimal Downtime: User-facing services are restored within minutes of the outage detection, significantly reducing application downtime.
+Minimal Data Loss: Data loss is restricted to transactions in flight at the exact moment of the us-central1 outage that hadn't yet been replicated to the Cloud SQL read replica or flushed to multi-region Cloud Storage. For most applications, this is an acceptable RPO (Recovery Point Objective).
+Seamless User Experience: Most users experience a brief interruption or elevated latency before being seamlessly redirected to the us-east1 deployment.
+Operational Resilience: Our infrastructure demonstrates high availability and resilience against regional failures.
+Recovery (Back-to-us-central1):
+
+Once us-central1 is restored and deemed healthy by Google Cloud:
+
+Monitor us-central1 Health: Continuously monitor the health of us-central1 services and APIs.
+Re-establish Cloud SQL Replication: Create a new read replica in us-central1 from the currently promoted primary in us-east1. Allow time for the replica to fully catch up.
+Data Synchronization: Ensure all data synchronization is complete between us-east1 and us-central1 (for any services that might have regional-specific data).
+DNS Failback (Planned Downtime):
+During a pre-scheduled maintenance window, update the Cloud DNS records to point back to the us-central1 endpoints.
+Perform thorough testing to ensure us-central1 is fully operational.
+Cloud SQL Failback (Optional): If desired, you can promote the us-central1 replica back to primary. This involves stopping writes to the us-east1 primary, promoting the us-central1 replica, and then recreating a read replica in us-east1. This step might incur a brief application downtime.
+Decommission us-east1 Resources (if active-passive): If us-east1 was only for DR, scale down or decommission the us-east1 resources to optimize costs. Maintain the pre-provisioned infrastructure for future DR events.
+Post-Mortem Analysis: Conduct a thorough post-mortem to identify any gaps in the plan, areas for improvement, and document lessons learned. Update the DR plan accordingly.
+This STAR-based plan provides a clear, actionable framework for responding to a regional outage in Google Cloud's us-central1, leveraging key GCP services for robust disaster recovery.
+
